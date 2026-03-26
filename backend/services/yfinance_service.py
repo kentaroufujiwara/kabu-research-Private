@@ -4,9 +4,11 @@ yfinance を使って日本株データを取得するサービス。
 """
 
 import json
+import time
 import yfinance as yf
 import requests
 from cache import cached
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 # Yahoo Finance のレート制限を回避するためのカスタムセッション
 _session = requests.Session()
@@ -32,6 +34,12 @@ def _wrap_yf_errors(func):
     import functools
 
     @functools.wraps(func)
+    @retry(
+        retry=retry_if_exception_type(RateLimitError),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=2, max=10),
+        reraise=True,
+    )
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
@@ -40,7 +48,6 @@ def _wrap_yf_errors(func):
                 raise RateLimitError("Yahoo Finance のレート制限に達しました。しばらく待ってから再試行してください。") from e
             raise
         except json.JSONDecodeError as e:
-            # yfinance が空レスポンスを返すのはレート制限時が多い
             raise RateLimitError("Yahoo Finance からデータを取得できませんでした（レート制限の可能性）。") from e
 
     return wrapper
