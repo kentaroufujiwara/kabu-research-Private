@@ -4,9 +4,9 @@ Google News RSS で銘柄名検索 → 銘柄固有のニュースを返す。
 """
 
 import xml.etree.ElementTree as ET
+import urllib.parse
 import httpx
 from datetime import datetime, timezone
-from services.jquants_service import get_company_name
 from cache import cached
 
 
@@ -14,12 +14,9 @@ class NotFoundError(Exception):
     pass
 
 
-def _fetch_google_news(company_name: str, code: str) -> list[dict]:
-    """Google News RSS で銘柄名検索"""
-    query = f"{company_name} {code}"
-    url = f"https://news.google.com/rss/search?q={httpx.URL('', params={'q': query}).params}&hl=ja&gl=JP&ceid=JP:ja"
-    # シンプルにURLを構築
-    import urllib.parse
+def _fetch_google_news(code: str) -> list[dict]:
+    """Google News RSS で銘柄コード検索（銘柄固有のニュースを取得）"""
+    query = f"{code} 株"
     encoded_q = urllib.parse.quote(query)
     url = f"https://news.google.com/rss/search?q={encoded_q}&hl=ja&gl=JP&ceid=JP:ja"
     try:
@@ -91,9 +88,8 @@ def _normalize_date(date_str: str) -> str | None:
 
 @cached("news")
 def fetch_news(code: str) -> dict:
-    # 会社名を取得してGoogle Newsで検索
-    company_name = get_company_name(code)
-    google_items = _fetch_google_news(company_name, code)
+    # 銘柄コードでGoogle News検索
+    google_items = _fetch_google_news(code)
 
     # Google Newsで十分取れなければYahoo Finance RSSも追加
     yahoo_items = []
