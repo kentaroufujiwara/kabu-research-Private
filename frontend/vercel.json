@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://kabu-research-api.onrender.com/api/:path*"
+    }
+  ]
+}
