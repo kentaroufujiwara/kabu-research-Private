@@ -230,3 +230,4 @@ def _to_float(val) -> float | None:
         return round(float(val), 4)
     except (ValueError, TypeError):
         return None
+# J-Quants V2 API
