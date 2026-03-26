@@ -21,3 +21,23 @@ app.include_router(news.router, prefix="/api")
 @app.get("/")
 def root():
     return {"status": "ok", "message": "Japan Stock Research API"}
+
+
+@app.get("/debug/stooq")
+def debug_stooq():
+    """stooq アクセス診断用（一時エンドポイント）"""
+    import requests as req
+    try:
+        resp = req.get(
+            "https://stooq.com/q/d/l/",
+            params={"s": "7203.jp", "d1": "20250101", "d2": "20260326", "i": "d"},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10,
+        )
+        return {
+            "status_code": resp.status_code,
+            "content_length": len(resp.text),
+            "first_200_chars": resp.text[:200],
+        }
+    except Exception as e:
+        return {"error": str(e)}
