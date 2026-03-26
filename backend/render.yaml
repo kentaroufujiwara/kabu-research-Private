@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: kabu-research-api
+    runtime: python
+    region: singapore
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11"
+      - key: EDINET_API_KEY
+        sync: false   # Render ダッシュボードで設定
+    healthCheckPath: /
