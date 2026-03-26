@@ -25,42 +25,26 @@ def root():
 
 @app.get("/debug/jquants")
 def debug_jquants():
-    """J-Quants 認証診断用（一時エンドポイント）"""
+    """J-Quants 診断用（一時エンドポイント）"""
     import os, requests as req
-    refresh_token = os.environ.get("JQUANTS_REFRESH_TOKEN", "")
-    try:
-        # リフレッシュトークン → IDトークン
-        r = req.post(
-            "https://api.jquants.com/v1/token/auth_refresh",
-            params={"refreshtoken": refresh_token},
-            timeout=10,
-        )
-        id_token = r.json().get("idToken", "")
-        if not id_token:
-            return {"step": "auth_refresh", "status": r.status_code, "response": r.json()}
+    api_key = os.environ.get("JQUANTS_API_KEY", "")
+    results = {"api_key_set": bool(api_key), "api_key_prefix": api_key[:8] if api_key else ""}
 
-        # IDトークンでAPIテスト
-        r2 = req.get(
-            "https://api.jquants.com/v1/listed/info",
-            params={"code": "7203"},
-            headers={"Authorization": f"Bearer {id_token}"},
-            timeout=10,
-        )
-        return {"auth": "ok", "api_status": r2.status_code, "sample": r2.json()}
-    except Exception as e:
-        # APIキー直接使用テスト
-        api_key = os.environ.get("JQUANTS_API_KEY", "")
-        if api_key:
-            try:
-                r3 = req.get(
-                    "https://api.jquants.com/v1/listed/info",
-                    params={"code": "7203"},
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    timeout=10,
-                )
-                return {"auth": "api_key_direct", "api_status": r3.status_code, "sample": r3.json()}
-            except Exception as e2:
-                return {"error": str(e2)}
+    # APIキー直接使用テスト
+    if api_key:
+        try:
+            r = req.get(
+                "https://api.jquants.com/v1/listed/info",
+                params={"code": "7203"},
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=10,
+            )
+            results["api_key_status"] = r.status_code
+            results["api_key_response"] = r.json()
+        except Exception as e:
+            results["api_key_error"] = str(e)
+
+    return results
     except Exception as e:
         return {"error": str(e)}
 
