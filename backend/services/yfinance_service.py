@@ -1,6 +1,7 @@
 """
-Yahoo Finance v7 APIとstooq.comを使って日本株データを取得するサービス。
-yfinanceライブラリを使わず直接HTTPリクエストを行う。
+Yahoo Finance v8 chart API と stooq を使って日本株データを取得するサービス。
+- 会社情報・チャート: Yahoo Finance v8 chart API (認証不要)
+- 株価チャート: stooq.com (バックアップ)
 """
 
 import io
@@ -36,54 +37,49 @@ def to_ticker(code: str) -> str:
         code = f"{code}.T"
     return code
 
-# news_service.py との互換性のためのエイリアス
+# news_service.py との互換性
 to_yf_ticker = to_ticker
 
 
-def _pct(value) -> float | None:
-    if value is None:
-        return None
-    return round(float(value) * 100, 2)
+def _v8_meta(code: str) -> dict:
+    """Yahoo Finance v8 chart API からメタデータを取得"""
+    ticker = to_ticker(code)
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+    resp = _session.get(url, params={"interval": "1d", "range": "5d"}, timeout=10)
+    if resp.status_code == 404:
+        raise NotFoundError(f"銘柄が見つかりません: {code}")
+    if resp.status_code == 429:
+        raise RateLimitError("Yahoo Finance のレート制限に達しました。")
+    resp.raise_for_status()
+
+    result = resp.json().get("chart", {}).get("result") or []
+    if not result:
+        raise NotFoundError(f"銘柄が見つかりません: {code}")
+    return result[0].get("meta", {})
 
 
 # ---------- 企業概要 ----------
 
 @cached("company")
 def fetch_company_info(code: str) -> dict:
-    ticker = to_ticker(code)
-    url = "https://query1.finance.yahoo.com/v7/finance/quote"
-    params = {"symbols": ticker, "lang": "en-US", "region": "JP"}
-
-    resp = _session.get(url, params=params, timeout=10)
-    if resp.status_code == 429:
-        raise RateLimitError("Yahoo Finance のレート制限に達しました。")
-    resp.raise_for_status()
-
-    results = resp.json().get("quoteResponse", {}).get("result", [])
-    if not results:
-        raise NotFoundError(f"銘柄が見つかりません: {code}")
-
-    info = results[0]
-    if not info.get("longName") and not info.get("shortName"):
-        raise NotFoundError(f"銘柄が見つかりません: {code}")
-
+    meta = _v8_meta(code)
     return {
         "code": code,
-        "ticker": ticker,
-        "name": info.get("longName") or info.get("shortName", ""),
-        "industry": info.get("industry", ""),
-        "sector": info.get("sector", ""),
-        "exchange": info.get("fullExchangeName", info.get("exchange", "")),
-        "market_cap": info.get("marketCap"),
+        "ticker": to_ticker(code),
+        "name": meta.get("longName") or meta.get("shortName", ""),
+        "industry": "",
+        "sector": "",
+        "exchange": meta.get("fullExchangeName") or meta.get("exchangeName", ""),
+        "market_cap": None,
         "website": "",
         "address": "",
         "business_summary": "",
-        "employees": info.get("fullTimeEmployees"),
-        "currency": info.get("currency", "JPY"),
-        "price": info.get("regularMarketPrice"),
-        "previous_close": info.get("regularMarketPreviousClose"),
-        "52w_high": info.get("fiftyTwoWeekHigh"),
-        "52w_low": info.get("fiftyTwoWeekLow"),
+        "employees": None,
+        "currency": meta.get("currency", "JPY"),
+        "price": meta.get("regularMarketPrice"),
+        "previous_close": meta.get("chartPreviousClose"),
+        "52w_high": meta.get("fiftyTwoWeekHigh"),
+        "52w_low": meta.get("fiftyTwoWeekLow"),
     }
 
 
@@ -91,97 +87,34 @@ def fetch_company_info(code: str) -> dict:
 
 @cached("financials")
 def fetch_financials(code: str) -> dict:
-    ticker = to_ticker(code)
-
-    # バリュエーション・健全性指標: v7 quote API
-    url = "https://query1.finance.yahoo.com/v7/finance/quote"
-    params = {"symbols": ticker, "lang": "en-US", "region": "JP"}
-    resp = _session.get(url, params=params, timeout=10)
-    if resp.status_code == 429:
-        raise RateLimitError("Yahoo Finance のレート制限に達しました。")
-    resp.raise_for_status()
-
-    results = resp.json().get("quoteResponse", {}).get("result", [])
-    if not results:
-        raise NotFoundError(f"銘柄が見つかりません: {code}")
-    info = results[0]
-
-    # 業績推移: timeseries API
-    performance = _fetch_timeseries(ticker)
-
+    meta = _v8_meta(code)
     return {
         "code": code,
-        "performance": performance,
+        "performance": [],
         "valuation": {
-            "price": info.get("regularMarketPrice"),
-            "market_cap": info.get("marketCap"),
-            "per": info.get("trailingPE"),
-            "forward_per": info.get("forwardPE"),
-            "pbr": info.get("priceToBook"),
-            "dividend_yield": _pct(info.get("dividendYield")),
-            "dividend_per_share": info.get("dividendRate"),
-            "eps": info.get("epsTrailingTwelveMonths"),
-            "eps_forward": info.get("epsForward"),
-            "ev_ebitda": info.get("enterpriseToEbitda"),
+            "price": meta.get("regularMarketPrice"),
+            "market_cap": None,
+            "per": None,
+            "forward_per": None,
+            "pbr": None,
+            "dividend_yield": None,
+            "dividend_per_share": None,
+            "eps": None,
+            "eps_forward": None,
+            "ev_ebitda": None,
         },
         "health": {
-            "roe": _pct(info.get("returnOnEquity")),
-            "roa": _pct(info.get("returnOnAssets")),
-            "current_ratio": info.get("currentRatio"),
-            "debt_to_equity": info.get("debtToEquity"),
-            "total_debt": info.get("totalDebt"),
-            "total_cash": info.get("totalCash"),
-            "free_cashflow": info.get("freeCashflow"),
-            "operating_cashflow": info.get("operatingCashflow"),
+            "roe": None,
+            "roa": None,
+            "current_ratio": None,
+            "debt_to_equity": None,
+            "total_debt": None,
+            "total_cash": None,
+            "free_cashflow": None,
+            "operating_cashflow": None,
             "equity_ratio": None,
         },
     }
-
-
-def _fetch_timeseries(ticker: str) -> list[dict]:
-    url = (
-        "https://query1.finance.yahoo.com/ws/fundamentals-timeseries"
-        f"/v1/finance/timeseries/{ticker}"
-    )
-    params = {
-        "type": "annualTotalRevenue,annualOperatingIncome,annualNetIncome,annualBasicEPS",
-        "period1": "1000000000",
-        "period2": "9999999999",
-    }
-    try:
-        resp = _session.get(url, params=params, timeout=10)
-        resp.raise_for_status()
-        ts_results = resp.json().get("timeseries", {}).get("result", [])
-    except Exception:
-        return []
-
-    buckets: dict[str, dict] = {}
-    key_map = {
-        "annualTotalRevenue": "revenue",
-        "annualOperatingIncome": "operating_income",
-        "annualNetIncome": "net_income",
-        "annualBasicEPS": "eps",
-    }
-    for series in ts_results:
-        series_type = (series.get("meta", {}).get("type") or [""])[0]
-        field = key_map.get(series_type)
-        if not field:
-            continue
-        for item in (series.get(series_type) or []):
-            if item is None:
-                continue
-            year = (item.get("asOfDate") or "")[:4]
-            raw = (item.get("reportedValue") or {}).get("raw")
-            if not year or raw is None:
-                continue
-            buckets.setdefault(year, {"fiscal_year": year, "revenue": None,
-                                       "operating_income": None, "net_income": None, "eps": None})
-            if field == "eps":
-                buckets[year][field] = round(float(raw), 2)
-            else:
-                buckets[year][field] = int(raw)
-
-    return sorted(buckets.values(), key=lambda r: r["fiscal_year"], reverse=True)[:5]
 
 
 # ---------- 株価チャート (stooq) ----------
@@ -212,11 +145,11 @@ def fetch_chart(code: str, period: str = "1y") -> dict:
     resp.raise_for_status()
 
     content = resp.text.strip()
-    if not content or content.startswith("No data") or "Date" not in content:
+    if not content or "Date" not in content:
         raise NotFoundError(f"株価データが見つかりません: {code}")
 
     reader = csv.DictReader(io.StringIO(content))
-    rows = sorted(list(reader), key=lambda r: r["Date"])
+    rows = sorted(list(reader), key=lambda r: r.get("Date", ""))
 
     if not rows:
         raise NotFoundError(f"株価データが見つかりません: {code}")
@@ -235,6 +168,9 @@ def fetch_chart(code: str, period: str = "1y") -> dict:
             })
         except (ValueError, KeyError):
             continue
+
+    if not candles:
+        raise NotFoundError(f"株価データが見つかりません: {code}")
 
     latest = candles[-1]
     first = candles[0]
