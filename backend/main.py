@@ -23,6 +23,28 @@ def root():
     return {"status": "ok", "message": "Japan Stock Research API"}
 
 
+@app.get("/debug/jquants")
+def debug_jquants():
+    """J-Quants 認証診断用（一時エンドポイント）"""
+    import os, requests as req
+    email = os.environ.get("JQUANTS_EMAIL", "NOT_SET")
+    password_set = bool(os.environ.get("JQUANTS_PASSWORD"))
+    try:
+        r = req.post(
+            "https://api.jquants.com/v1/token/auth_user",
+            json={"mailaddress": email, "password": os.environ.get("JQUANTS_PASSWORD", "")},
+            timeout=10,
+        )
+        return {
+            "email": email,
+            "password_set": password_set,
+            "status_code": r.status_code,
+            "response": r.json(),
+        }
+    except Exception as e:
+        return {"email": email, "password_set": password_set, "error": str(e)}
+
+
 @app.get("/debug/stooq")
 def debug_stooq():
     """stooq アクセス診断用（一時エンドポイント）"""
