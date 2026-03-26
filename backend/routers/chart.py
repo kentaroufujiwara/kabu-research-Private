@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Path, Query
-from services.yfinance_service import fetch_chart, NotFoundError, RateLimitError
+from services.jquants_service import fetch_chart, NotFoundError
+RateLimitError = Exception
 
 router = APIRouter(tags=["chart"])
 
