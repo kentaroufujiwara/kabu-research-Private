@@ -45,8 +45,6 @@ def debug_jquants():
             results["api_key_error"] = str(e)
 
     return results
-    except Exception as e:
-        return {"error": str(e)}
 
 
 @app.get("/debug/stooq")
