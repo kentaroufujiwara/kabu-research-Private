@@ -36,6 +36,9 @@ def to_ticker(code: str) -> str:
         code = f"{code}.T"
     return code
 
+# news_service.py との互換性のためのエイリアス
+to_yf_ticker = to_ticker
+
 
 def _pct(value) -> float | None:
     if value is None:
