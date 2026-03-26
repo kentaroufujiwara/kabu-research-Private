@@ -34,7 +34,7 @@ def _get(path: str, params: dict | None = None) -> dict:
     for attempt in range(3):
         r = _session.get(f"{_BASE}{path}", params=params, headers=headers, timeout=15)
         if r.status_code == 429:
-            time.sleep(2 ** attempt)
+            time.sleep([3, 8, 15][attempt])
             continue
         if r.status_code == 404:
             raise NotFoundError(f"データが見つかりません: {path}")
@@ -87,13 +87,6 @@ def fetch_company_info(code: str) -> dict:
     high_52w = max((q.get("H") or 0) for q in quotes) if quotes else None
     low_52w = min((q.get("L") or 0) for q in quotes if q.get("L")) if quotes else None
 
-    # 時価総額計算用に財務サマリーを取得
-    try:
-        stmt = _latest_annual_stmt(code)
-        market_cap = _calc_market_cap(price, stmt)
-    except Exception:
-        market_cap = None
-
     return {
         "code": code,
         "ticker": f"{code}.T",
@@ -101,7 +94,7 @@ def fetch_company_info(code: str) -> dict:
         "industry": info.get("S33Nm", ""),
         "sector": info.get("S33Nm", ""),
         "exchange": info.get("MktNm", "東証"),
-        "market_cap": market_cap,
+        "market_cap": None,
         "website": "",
         "address": "",
         "business_summary": "",
