@@ -99,7 +99,7 @@ def fetch_company_info(code: str) -> dict:
 def fetch_financials(code: str) -> dict:
     # 最新株価
     today = datetime.date.today()
-    start = (today - datetime.timedelta(days=30)).strftime("%Y-%m-%d")
+    start = (today - datetime.timedelta(days=400)).strftime("%Y-%m-%d")
     price_data = _get("/equities/bars/daily", params={"code": code, "from": start})
     quotes = sorted(price_data.get("data") or [], key=lambda q: q.get("Date", ""))
     price = quotes[-1].get("C") if quotes else None
