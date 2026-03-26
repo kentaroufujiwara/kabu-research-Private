@@ -1,7 +1,6 @@
 """
-Yahoo Finance v8 chart API と stooq を使って日本株データを取得するサービス。
-- 会社情報・チャート: Yahoo Finance v8 chart API (認証不要)
-- 株価チャート: stooq.com (バックアップ)
+stooq.com を使って日本株データを取得するサービス。
+Yahoo Finance への依存を完全に排除。
 """
 
 import io
@@ -16,7 +15,6 @@ _HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/120.0.0.0 Safari/537.36"
     ),
-    "Accept": "application/json",
 }
 
 _session = requests.Session()
@@ -37,87 +35,56 @@ def to_ticker(code: str) -> str:
         code = f"{code}.T"
     return code
 
-# news_service.py との互換性
 to_yf_ticker = to_ticker
 
 
-def _v8_meta(code: str) -> dict:
-    """Yahoo Finance v8 chart API からメタデータを取得"""
-    ticker = to_ticker(code)
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
-    resp = _session.get(url, params={"interval": "1d", "range": "5d"}, timeout=10)
-    if resp.status_code == 404:
-        raise NotFoundError(f"銘柄が見つかりません: {code}")
-    if resp.status_code == 429:
-        raise RateLimitError("Yahoo Finance のレート制限に達しました。")
-    resp.raise_for_status()
+# ---------- 銘柄名マスタ ----------
 
-    result = resp.json().get("chart", {}).get("result") or []
-    if not result:
-        raise NotFoundError(f"銘柄が見つかりません: {code}")
-    return result[0].get("meta", {})
-
-
-# ---------- 企業概要 ----------
-
-@cached("company")
-def fetch_company_info(code: str) -> dict:
-    meta = _v8_meta(code)
-    return {
-        "code": code,
-        "ticker": to_ticker(code),
-        "name": meta.get("longName") or meta.get("shortName", ""),
-        "industry": "",
-        "sector": "",
-        "exchange": meta.get("fullExchangeName") or meta.get("exchangeName", ""),
-        "market_cap": None,
-        "website": "",
-        "address": "",
-        "business_summary": "",
-        "employees": None,
-        "currency": meta.get("currency", "JPY"),
-        "price": meta.get("regularMarketPrice"),
-        "previous_close": meta.get("chartPreviousClose"),
-        "52w_high": meta.get("fiftyTwoWeekHigh"),
-        "52w_low": meta.get("fiftyTwoWeekLow"),
-    }
-
-
-# ---------- 財務データ ----------
-
-@cached("financials")
-def fetch_financials(code: str) -> dict:
-    meta = _v8_meta(code)
-    return {
-        "code": code,
-        "performance": [],
-        "valuation": {
-            "price": meta.get("regularMarketPrice"),
-            "market_cap": None,
-            "per": None,
-            "forward_per": None,
-            "pbr": None,
-            "dividend_yield": None,
-            "dividend_per_share": None,
-            "eps": None,
-            "eps_forward": None,
-            "ev_ebitda": None,
-        },
-        "health": {
-            "roe": None,
-            "roa": None,
-            "current_ratio": None,
-            "debt_to_equity": None,
-            "total_debt": None,
-            "total_cash": None,
-            "free_cashflow": None,
-            "operating_cashflow": None,
-            "equity_ratio": None,
-        },
-    }
+_STOCK_NAMES: dict[str, str] = {
+    "7203": "トヨタ自動車",
+    "6758": "ソニーグループ",
+    "9984": "ソフトバンクグループ",
+    "6861": "キーエンス",
+    "7974": "任天堂",
+    "4063": "信越化学工業",
+    "8306": "三菱UFJフィナンシャル・グループ",
+    "9432": "日本電信電話（NTT）",
+    "4519": "中外製薬",
+    "6098": "リクルートホールディングス",
+    "8035": "東京エレクトロン",
+    "6501": "日立製作所",
+    "6902": "デンソー",
+    "4543": "テルモ",
+    "9433": "KDDI",
+    "8058": "三菱商事",
+    "7267": "本田技研工業",
+    "6702": "富士通",
+    "4568": "第一三共",
+    "8001": "伊藤忠商事",
+    "9022": "東海旅客鉄道（JR東海）",
+    "9020": "東日本旅客鉄道（JR東日本）",
+    "2802": "味の素",
+    "3382": "セブン&アイ・ホールディングス",
+    "4452": "花王",
+    "7751": "キヤノン",
+    "6981": "村田製作所",
+    "5401": "日本製鉄",
+    "8316": "三井住友フィナンシャルグループ",
+    "8411": "みずほフィナンシャルグループ",
+    "6367": "ダイキン工業",
+    "4901": "富士フイルムホールディングス",
+    "8031": "三井物産",
+    "2914": "日本たばこ産業（JT）",
+    "4502": "武田薬品工業",
+    "9984": "ソフトバンクグループ",
+    "7741": "HOYA",
+    "6645": "オムロン",
+    "6503": "三菱電機",
+    "7733": "オリンパス",
+}
 
 
-# ---------- 株価チャート (stooq) ----------
+# ---------- stooq CSV 取得 ----------
 
 VALID_PERIODS = {"1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y"}
 _PERIOD_DAYS = {
@@ -126,13 +93,9 @@ _PERIOD_DAYS = {
 }
 
 
-@cached("chart")
-def fetch_chart(code: str, period: str = "1y") -> dict:
-    if period not in VALID_PERIODS:
-        period = "1y"
-
+def _fetch_stooq(code: str, days: int = 370) -> list[dict]:
     end_date = datetime.date.today()
-    start_date = end_date - datetime.timedelta(days=_PERIOD_DAYS.get(period, 370))
+    start_date = end_date - datetime.timedelta(days=days)
 
     url = "https://stooq.com/q/d/l/"
     params = {
@@ -151,9 +114,6 @@ def fetch_chart(code: str, period: str = "1y") -> dict:
     reader = csv.DictReader(io.StringIO(content))
     rows = sorted(list(reader), key=lambda r: r.get("Date", ""))
 
-    if not rows:
-        raise NotFoundError(f"株価データが見つかりません: {code}")
-
     candles = []
     for row in rows:
         try:
@@ -171,6 +131,74 @@ def fetch_chart(code: str, period: str = "1y") -> dict:
 
     if not candles:
         raise NotFoundError(f"株価データが見つかりません: {code}")
+
+    return candles
+
+
+# ---------- 企業概要 ----------
+
+@cached("company")
+def fetch_company_info(code: str) -> dict:
+    candles = _fetch_stooq(code, days=370)
+    latest = candles[-1]
+    prev = candles[-2] if len(candles) > 1 else candles[-1]
+
+    high_52w = max(c["high"] for c in candles)
+    low_52w = min(c["low"] for c in candles)
+
+    return {
+        "code": code,
+        "ticker": to_ticker(code),
+        "name": _STOCK_NAMES.get(code, f"銘柄 {code}"),
+        "industry": "",
+        "sector": "",
+        "exchange": "東証",
+        "market_cap": None,
+        "website": "",
+        "address": "",
+        "business_summary": "",
+        "employees": None,
+        "currency": "JPY",
+        "price": latest["close"],
+        "previous_close": prev["close"],
+        "52w_high": high_52w,
+        "52w_low": low_52w,
+    }
+
+
+# ---------- 財務データ ----------
+
+@cached("financials")
+def fetch_financials(code: str) -> dict:
+    candles = _fetch_stooq(code, days=5)
+    price = candles[-1]["close"] if candles else None
+
+    return {
+        "code": code,
+        "performance": [],
+        "valuation": {
+            "price": price,
+            "market_cap": None,
+            "per": None, "forward_per": None, "pbr": None,
+            "dividend_yield": None, "dividend_per_share": None,
+            "eps": None, "eps_forward": None, "ev_ebitda": None,
+        },
+        "health": {
+            "roe": None, "roa": None, "current_ratio": None,
+            "debt_to_equity": None, "total_debt": None, "total_cash": None,
+            "free_cashflow": None, "operating_cashflow": None, "equity_ratio": None,
+        },
+    }
+
+
+# ---------- 株価チャート ----------
+
+@cached("chart")
+def fetch_chart(code: str, period: str = "1y") -> dict:
+    if period not in VALID_PERIODS:
+        period = "1y"
+
+    candles = _fetch_stooq(code, days=_PERIOD_DAYS.get(period, 370))
 
     latest = candles[-1]
     first = candles[0]
@@ -195,38 +223,7 @@ def fetch_chart(code: str, period: str = "1y") -> dict:
 
 # ---------- 銘柄検索 ----------
 
-_STATIC_STOCKS = [
-    ("7203", "トヨタ自動車"),
-    ("6758", "ソニーグループ"),
-    ("9984", "ソフトバンクグループ"),
-    ("6861", "キーエンス"),
-    ("7974", "任天堂"),
-    ("4063", "信越化学工業"),
-    ("8306", "三菱UFJフィナンシャル・グループ"),
-    ("9432", "日本電信電話（NTT）"),
-    ("4519", "中外製薬"),
-    ("6098", "リクルートホールディングス"),
-    ("8035", "東京エレクトロン"),
-    ("6501", "日立製作所"),
-    ("6902", "デンソー"),
-    ("4543", "テルモ"),
-    ("9433", "KDDI"),
-    ("8058", "三菱商事"),
-    ("7267", "本田技研工業"),
-    ("6702", "富士通"),
-    ("4568", "第一三共"),
-    ("8001", "伊藤忠商事"),
-    ("9022", "東海旅客鉄道（JR東海）"),
-    ("9020", "東日本旅客鉄道（JR東日本）"),
-    ("2802", "味の素"),
-    ("3382", "セブン&アイ・ホールディングス"),
-    ("4452", "花王"),
-    ("7751", "キヤノン"),
-    ("6981", "村田製作所"),
-    ("5401", "日本製鉄"),
-    ("8316", "三井住友フィナンシャルグループ"),
-    ("8411", "みずほフィナンシャルグループ"),
-]
+_STATIC_STOCKS = [(code, name) for code, name in _STOCK_NAMES.items()]
 
 
 @cached("search")
@@ -253,6 +250,7 @@ def search_stocks(query: str) -> list[dict]:
             results.append({"code": code, "name": name, "matched_by": "name"})
             seen_codes.add(code)
 
+    # Yahoo Finance 検索（失敗してもOK）
     try:
         resp = _session.get(
             "https://query1.finance.yahoo.com/v1/finance/search",
