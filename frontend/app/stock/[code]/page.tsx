@@ -107,7 +107,7 @@ export default function StockPage() {
             )}
 
             <p className="text-center text-xs text-gray-400 pb-4">
-              ※ 本情報は投資判断の参考情報です。データは yfinance 経由で取得しており、遅延・誤差が生じる場合があります。
+              ※ 本情報は投資判断の参考情報です。データは J-Quants API（JPX公式）経由で取得しており、遅延・誤差が生じる場合があります。
               投資の最終判断はご自身でお願いします。
             </p>
           </>

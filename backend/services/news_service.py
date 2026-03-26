@@ -1,13 +1,12 @@
 """
-ニュース・適時開示情報の取得サービス。
-1. Yahoo Finance RSS（英語ニュース、認証不要）
-2. EDINET API（適時開示）※ APIキー取得後に有効化
+ニュース取得サービス。
+Google News RSS で銘柄名検索 → 銘柄固有のニュースを返す。
 """
 
 import xml.etree.ElementTree as ET
 import httpx
 from datetime import datetime, timezone
-from services.yfinance_service import to_yf_ticker
+from services.jquants_service import get_company_name
 from cache import cached
 
 
@@ -15,10 +14,28 @@ class NotFoundError(Exception):
     pass
 
 
-# ---------- Yahoo Finance RSS ----------
+def _fetch_google_news(company_name: str, code: str) -> list[dict]:
+    """Google News RSS で銘柄名検索"""
+    query = f"{company_name} {code}"
+    url = f"https://news.google.com/rss/search?q={httpx.URL('', params={'q': query}).params}&hl=ja&gl=JP&ceid=JP:ja"
+    # シンプルにURLを構築
+    import urllib.parse
+    encoded_q = urllib.parse.quote(query)
+    url = f"https://news.google.com/rss/search?q={encoded_q}&hl=ja&gl=JP&ceid=JP:ja"
+    try:
+        resp = httpx.get(url, timeout=10, follow_redirects=True, headers={
+            "User-Agent": "Mozilla/5.0 (compatible; kabu-research/1.0)"
+        })
+        if resp.status_code != 200:
+            return []
+        return _parse_rss(resp.text, source="Google News")
+    except Exception:
+        return []
+
 
 def _fetch_yahoo_rss(code: str) -> list[dict]:
-    ticker = to_yf_ticker(code)  # e.g. "7203.T"
+    """Yahoo Finance RSS（英語ニュース、フォールバック用）"""
+    ticker = f"{code}.T"
     url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
     try:
         resp = httpx.get(url, timeout=8, follow_redirects=True, headers={
@@ -72,82 +89,33 @@ def _normalize_date(date_str: str) -> str | None:
     return date_str
 
 
-# ---------- EDINET API（APIキー必要） ----------
-
-def _fetch_edinet_docs(code: str) -> list[dict]:
-    """
-    EDINET API v2 で適時開示を取得。
-    環境変数 EDINET_API_KEY が設定されている場合のみ有効。
-    取得先: https://api.edinet-fsa.go.jp/
-    """
-    import os
-    from datetime import date, timedelta
-
-    api_key = os.environ.get("EDINET_API_KEY", "")
-    if not api_key:
-        return []
-
-    items = []
-    for delta in range(0, 14):
-        target_date = (date.today() - timedelta(days=delta)).strftime("%Y-%m-%d")
-        try:
-            resp = httpx.get(
-                "https://api.edinet-fsa.go.jp/api/v2/documents.json",
-                params={"date": target_date, "type": 2, "Subscription-Key": api_key},
-                timeout=8,
-            )
-            if resp.status_code != 200:
-                continue
-            data = resp.json()
-            if data.get("statusCode") == 401:
-                break
-            for doc in data.get("results", []):
-                sec_code = doc.get("secCode", "")
-                if sec_code and sec_code[:4] != code[:4]:
-                    continue
-                doc_type_labels = {
-                    "120": "有価証券報告書", "130": "訂正有価証券報告書",
-                    "140": "半期報告書", "160": "四半期報告書",
-                    "050": "臨時報告書", "060": "訂正臨時報告書",
-                }
-                doc_type = doc.get("docTypeCode", "")
-                doc_name = doc_type_labels.get(doc_type, doc.get("docDescription", "開示書類"))
-                doc_id = doc.get("docID", "")
-                company_name = doc.get("filerName", "")
-                submitted_at = doc.get("submitDateTime", "")
-                if doc_id:
-                    items.append({
-                        "title": f"【{doc_name}】{company_name}",
-                        "url": f"https://disclosure2.edinet-fsa.go.jp/WZEK0040.aspx?S1{doc_id}",
-                        "published_at": submitted_at or None,
-                        "source": "EDINET",
-                        "description": f"書類種別: {doc_name}",
-                    })
-        except Exception:
-            continue
-        if len(items) >= 5:
-            break
-    return items[:5]
-
-
-# ---------- メイン ----------
-
 @cached("news")
 def fetch_news(code: str) -> dict:
-    yahoo_items = _fetch_yahoo_rss(code)
-    edinet_items = _fetch_edinet_docs(code)
+    # 会社名を取得してGoogle Newsで検索
+    company_name = get_company_name(code)
+    google_items = _fetch_google_news(company_name, code)
 
-    all_items = yahoo_items + edinet_items
-    all_items.sort(
-        key=lambda x: x.get("published_at") or "",
-        reverse=True,
-    )
+    # Google Newsで十分取れなければYahoo Finance RSSも追加
+    yahoo_items = []
+    if len(google_items) < 5:
+        yahoo_items = _fetch_yahoo_rss(code)
+
+    all_items = google_items + yahoo_items
+    # 重複URLを除去
+    seen = set()
+    unique_items = []
+    for item in all_items:
+        if item["url"] not in seen:
+            seen.add(item["url"])
+            unique_items.append(item)
+
+    unique_items.sort(key=lambda x: x.get("published_at") or "", reverse=True)
 
     return {
         "code": code,
-        "items": all_items[:15],
+        "items": unique_items[:15],
         "sources": {
             "yahoo_count": len(yahoo_items),
-            "edinet_count": len(edinet_items),
+            "edinet_count": 0,
         },
     }

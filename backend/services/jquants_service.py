@@ -45,19 +45,29 @@ def _get(path: str, params: dict | None = None) -> dict:
     raise Exception("レートリミット: しばらく後に再試行してください")
 
 
-def _to_code5(code: str) -> str:
-    """4桁コードを5桁に変換 (7203 → 72030)"""
-    if len(code) == 4:
-        return code + "0"
-    return code
+def _latest_annual_stmt(code: str) -> dict:
+    """最新の年次財務サマリーを返す（共通処理）"""
+    fin_data = _get("/fins/summary", params={"code": code})
+    statements = fin_data.get("data") or []
+    annual = [s for s in statements if "FY" in (s.get("CurPerType") or "")]
+    if not annual:
+        annual = statements
+    annual_sorted = sorted(annual, key=lambda s: s.get("CurPerEn", ""), reverse=True)
+    return annual_sorted[0] if annual_sorted else {}
+
+
+def _calc_market_cap(price: float | None, stmt: dict) -> int | None:
+    shares = _to_int(stmt.get("ShOutFY"))
+    treasury = _to_int(stmt.get("TrShFY")) or 0
+    if shares and price:
+        return int((shares - treasury) * price)
+    return None
 
 
 # ---------- 企業概要 ----------
 
 @cached("company")
 def fetch_company_info(code: str) -> dict:
-    code5 = _to_code5(code)
-
     # 企業マスタ
     master_data = _get("/equities/master", params={"code": code})
     items = master_data.get("data") or []
@@ -65,7 +75,7 @@ def fetch_company_info(code: str) -> dict:
         raise NotFoundError(f"銘柄が見つかりません: {code}")
     info = items[0]
 
-    # 最新株価
+    # 最新株価（過去1年分）
     today = datetime.date.today()
     start = (today - datetime.timedelta(days=370)).strftime("%Y-%m-%d")
     price_data = _get("/equities/bars/daily", params={"code": code, "from": start})
@@ -73,8 +83,16 @@ def fetch_company_info(code: str) -> dict:
     latest = quotes[-1] if quotes else {}
     prev = quotes[-2] if len(quotes) > 1 else latest
 
+    price = latest.get("C") or latest.get("AdjC")
     high_52w = max((q.get("H") or 0) for q in quotes) if quotes else None
     low_52w = min((q.get("L") or 0) for q in quotes if q.get("L")) if quotes else None
+
+    # 時価総額計算用に財務サマリーを取得
+    try:
+        stmt = _latest_annual_stmt(code)
+        market_cap = _calc_market_cap(price, stmt)
+    except Exception:
+        market_cap = None
 
     return {
         "code": code,
@@ -83,13 +101,13 @@ def fetch_company_info(code: str) -> dict:
         "industry": info.get("S33Nm", ""),
         "sector": info.get("S33Nm", ""),
         "exchange": info.get("MktNm", "東証"),
-        "market_cap": None,
+        "market_cap": market_cap,
         "website": "",
         "address": "",
         "business_summary": "",
         "employees": None,
         "currency": "JPY",
-        "price": latest.get("C") or latest.get("AdjC"),
+        "price": price,
         "previous_close": prev.get("C") or prev.get("AdjC"),
         "52w_high": high_52w or None,
         "52w_low": low_52w or None,
@@ -105,13 +123,12 @@ def fetch_financials(code: str) -> dict:
     start = (today - datetime.timedelta(days=400)).strftime("%Y-%m-%d")
     price_data = _get("/equities/bars/daily", params={"code": code, "from": start})
     quotes = sorted(price_data.get("data") or [], key=lambda q: q.get("Date", ""))
-    price = quotes[-1].get("C") if quotes else None
+    price = float(quotes[-1].get("C") or 0) if quotes else None
 
-    # 財務サマリー
+    # 財務サマリー（全期間）
     fin_data = _get("/fins/summary", params={"code": code})
     statements = fin_data.get("data") or []
 
-    # 年次データのみ
     annual = [s for s in statements if "FY" in (s.get("CurPerType") or "")]
     if not annual:
         annual = statements
@@ -129,33 +146,52 @@ def fetch_financials(code: str) -> dict:
             "eps": _to_float(stmt.get("EPS")),
         })
 
-    latest_stmt = annual_sorted[0] if annual_sorted else {}
+    s = annual_sorted[0] if annual_sorted else {}
+
+    # 計算項目
+    eps = _to_float(s.get("EPS"))
+    bps = _to_float(s.get("BPS"))
+    div_ann = _to_float(s.get("DivAnn"))
+    np_val = _to_int(s.get("NP"))
+    eq_val = _to_int(s.get("Eq"))
+    ta_val = _to_int(s.get("TA"))
+    eq_ar = _to_float(s.get("EqAR"))
+
+    per = round(price / eps, 2) if price and eps else None
+    pbr = round(price / bps, 2) if price and bps else None
+    div_yield = round(div_ann / price * 100, 2) if div_ann and price else None
+    roe = round(np_val / eq_val * 100, 2) if np_val and eq_val else None
+    roa = round(np_val / ta_val * 100, 2) if np_val and ta_val else None
+    equity_ratio = round(eq_ar * 100, 2) if eq_ar is not None else None
+    market_cap = _calc_market_cap(price, s)
+
+    feps_raw = s.get("FEPS") or s.get("NxFEPS")
 
     return {
         "code": code,
         "performance": performance,
         "valuation": {
             "price": price,
-            "market_cap": None,
-            "per": None,
+            "market_cap": market_cap,
+            "per": per,
             "forward_per": None,
-            "pbr": None,
-            "dividend_yield": None,
-            "dividend_per_share": _to_float(latest_stmt.get("DivAnn")),
-            "eps": _to_float(latest_stmt.get("EPS")),
-            "eps_forward": _to_float(latest_stmt.get("FEPS") or latest_stmt.get("NxFEPS")),
+            "pbr": pbr,
+            "dividend_yield": div_yield,
+            "dividend_per_share": div_ann,
+            "eps": eps,
+            "eps_forward": _to_float(feps_raw),
             "ev_ebitda": None,
         },
         "health": {
-            "roe": None,
-            "roa": None,
+            "roe": roe,
+            "roa": roa,
             "current_ratio": None,
             "debt_to_equity": None,
             "total_debt": None,
-            "total_cash": _to_int(latest_stmt.get("CashEq")),
+            "total_cash": _to_int(s.get("CashEq")),
             "free_cashflow": None,
-            "operating_cashflow": _to_int(latest_stmt.get("CFO")),
-            "equity_ratio": _to_float(latest_stmt.get("EqAR")),
+            "operating_cashflow": _to_int(s.get("CFO")),
+            "equity_ratio": equity_ratio,
         },
     }
 
@@ -215,6 +251,20 @@ def fetch_chart(code: str, period: str = "1y") -> dict:
     }
 
 
+# ---------- 会社名取得（ニュース用） ----------
+
+def get_company_name(code: str) -> str:
+    """銘柄コードから会社名を取得"""
+    try:
+        master_data = _get("/equities/master", params={"code": code})
+        items = master_data.get("data") or []
+        if items:
+            return items[0].get("CoName") or items[0].get("CoNameEn") or code
+    except Exception:
+        pass
+    return code
+
+
 # ---------- ユーティリティ ----------
 
 def _to_int(val) -> int | None:
@@ -233,4 +283,3 @@ def _to_float(val) -> float | None:
         return round(float(val), 4)
     except (ValueError, TypeError):
         return None
-# J-Quants V2 API
