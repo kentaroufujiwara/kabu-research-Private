@@ -46,11 +46,21 @@ def debug_jquants():
             headers={"Authorization": f"Bearer {id_token}"},
             timeout=10,
         )
-        return {
-            "auth": "ok",
-            "api_status": r2.status_code,
-            "sample": r2.json(),
-        }
+        return {"auth": "ok", "api_status": r2.status_code, "sample": r2.json()}
+    except Exception as e:
+        # APIキー直接使用テスト
+        api_key = os.environ.get("JQUANTS_API_KEY", "")
+        if api_key:
+            try:
+                r3 = req.get(
+                    "https://api.jquants.com/v1/listed/info",
+                    params={"code": "7203"},
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    timeout=10,
+                )
+                return {"auth": "api_key_direct", "api_status": r3.status_code, "sample": r3.json()}
+            except Exception as e2:
+                return {"error": str(e2)}
     except Exception as e:
         return {"error": str(e)}
 

@@ -25,21 +25,25 @@ class AuthError(Exception):
 
 
 def _get_id_token() -> str:
-    """IDトークンを取得（キャッシュあり、23時間で再取得）"""
+    """APIキーまたはIDトークンを取得"""
+    # JQUANTS_API_KEY が設定されていればそれを直接使用
+    api_key = os.environ.get("JQUANTS_API_KEY", "")
+    if api_key:
+        return api_key
+
     now = time.time()
     if _token_cache["id_token"] and now < _token_cache["expires_at"]:
         return _token_cache["id_token"]
 
-    # ① リフレッシュトークンを環境変数から直接取得（推奨）
+    # リフレッシュトークンを環境変数から取得
     refresh_token = os.environ.get("JQUANTS_REFRESH_TOKEN", "")
 
-    # ② なければメール/パスワードから取得
+    # なければメール/パスワードから取得
     if not refresh_token:
         email = os.environ.get("JQUANTS_EMAIL", "")
         password = os.environ.get("JQUANTS_PASSWORD", "")
         if not email or not password:
-            raise AuthError("JQUANTS_REFRESH_TOKEN または JQUANTS_EMAIL/JQUANTS_PASSWORD が設定されていません")
-
+            raise AuthError("JQUANTS_API_KEY または JQUANTS_EMAIL/JQUANTS_PASSWORD が設定されていません")
         r = _session.post(
             f"{_BASE}/token/auth_user",
             json={"mailaddress": email, "password": password},
@@ -50,7 +54,6 @@ def _get_id_token() -> str:
         if not refresh_token:
             raise AuthError("リフレッシュトークンの取得に失敗しました")
 
-    # ③ IDトークン取得
     r2 = _session.post(
         f"{_BASE}/token/auth_refresh",
         params={"refreshtoken": refresh_token},
