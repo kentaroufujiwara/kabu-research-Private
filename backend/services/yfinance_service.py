@@ -4,9 +4,9 @@ yfinanceライブラリを使わず直接HTTPリクエストを行う。
 """
 
 import io
+import csv
 import datetime
 import requests
-import pandas as pd
 from cache import cached
 
 _HEADERS = {
@@ -212,23 +212,26 @@ def fetch_chart(code: str, period: str = "1y") -> dict:
     if not content or content.startswith("No data") or "Date" not in content:
         raise NotFoundError(f"株価データが見つかりません: {code}")
 
-    df = pd.read_csv(io.StringIO(content))
-    df = df.sort_values("Date").reset_index(drop=True)
+    reader = csv.DictReader(io.StringIO(content))
+    rows = sorted(list(reader), key=lambda r: r["Date"])
 
-    if df.empty:
+    if not rows:
         raise NotFoundError(f"株価データが見つかりません: {code}")
 
     candles = []
-    for _, row in df.iterrows():
-        vol = row.get("Volume")
-        candles.append({
-            "date": str(row["Date"]),
-            "open": round(float(row["Open"]), 2),
-            "high": round(float(row["High"]), 2),
-            "low": round(float(row["Low"]), 2),
-            "close": round(float(row["Close"]), 2),
-            "volume": int(vol) if pd.notna(vol) else None,
-        })
+    for row in rows:
+        try:
+            vol_str = row.get("Volume", "")
+            candles.append({
+                "date": row["Date"],
+                "open": round(float(row["Open"]), 2),
+                "high": round(float(row["High"]), 2),
+                "low": round(float(row["Low"]), 2),
+                "close": round(float(row["Close"]), 2),
+                "volume": int(float(vol_str)) if vol_str else None,
+            })
+        except (ValueError, KeyError):
+            continue
 
     latest = candles[-1]
     first = candles[0]
