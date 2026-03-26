@@ -27,22 +27,32 @@ def root():
 def debug_jquants():
     """J-Quants 認証診断用（一時エンドポイント）"""
     import os, requests as req
-    email = os.environ.get("JQUANTS_EMAIL", "NOT_SET")
-    password_set = bool(os.environ.get("JQUANTS_PASSWORD"))
+    refresh_token = os.environ.get("JQUANTS_REFRESH_TOKEN", "")
     try:
+        # リフレッシュトークン → IDトークン
         r = req.post(
-            "https://api.jquants.com/v1/token/auth_user",
-            json={"mailaddress": email, "password": os.environ.get("JQUANTS_PASSWORD", "")},
+            "https://api.jquants.com/v1/token/auth_refresh",
+            params={"refreshtoken": refresh_token},
+            timeout=10,
+        )
+        id_token = r.json().get("idToken", "")
+        if not id_token:
+            return {"step": "auth_refresh", "status": r.status_code, "response": r.json()}
+
+        # IDトークンでAPIテスト
+        r2 = req.get(
+            "https://api.jquants.com/v1/listed/info",
+            params={"code": "7203"},
+            headers={"Authorization": f"Bearer {id_token}"},
             timeout=10,
         )
         return {
-            "email": email,
-            "password_set": password_set,
-            "status_code": r.status_code,
-            "response": r.json(),
+            "auth": "ok",
+            "api_status": r2.status_code,
+            "sample": r2.json(),
         }
     except Exception as e:
-        return {"email": email, "password_set": password_set, "error": str(e)}
+        return {"error": str(e)}
 
 
 @app.get("/debug/stooq")
